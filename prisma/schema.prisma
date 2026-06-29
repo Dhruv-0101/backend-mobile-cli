@@ -1,0 +1,199 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum AuthMethod {
+  google
+  local
+  facebook
+  github
+}
+
+model User {
+  id                         Int              @id @default(autoincrement())
+  username                   String
+  profilePicture             String?
+  email                      String?
+  password                   String?
+  googleId                   String?
+  authMethod                 AuthMethod       @default(local)
+  accountVerificationToken   String?
+  accountVerificationExpires DateTime?
+  passwordResetToken         String?
+  passwordResetExpires       DateTime?
+  totalEarnings              Float            @default(0)
+  nextEarningDate            DateTime?
+  isEmailVerified            Boolean          @default(false)
+  hasSelectedPlan            Boolean          @default(false)
+  lastLogin                  DateTime         @default(now())
+  isAdmin                    Boolean          @default(false)
+  planId                     Int?
+  plan                       Plan?            @relation("UserSelectedPlan", fields: [planId], references: [id], onDelete: Cascade)
+  createdAt                  DateTime         @default(now())
+  updatedAt                  DateTime         @updatedAt
+
+  categories                 Category[]       @relation("UserCategories")
+  posts                      Post[]           @relation("UserPosts")
+  comments                   Comment[]        @relation("UserComments")
+  payments                   Payment[]        @relation("UserPayments")
+  notifications              Notification[]   @relation("UserNotifications")
+  challenges                 Challenge[]      @relation("UserChallenges")
+  likedislikes               LikeDislike[]    @relation("UserLikes")
+  viewedPosts                PostViewer[]     @relation("UserPostViews")
+
+  // Self-referential relations (followers/following) via explicit join table
+  followers                  FollowUnfollow[] @relation("UserBeingFollowed")
+  following                  FollowUnfollow[] @relation("UserFollowing")
+
+  @@map("users")
+}
+
+model Category {
+  id           Int      @id @default(autoincrement())
+  categoryName String
+  description  String?
+  userId       Int
+  user         User     @relation("UserCategories", fields: [userId], references: [id], onDelete: Cascade)
+  posts        Post[]   @relation("CategoryPosts")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("categories")
+}
+
+model Post {
+  id                       Int            @id @default(autoincrement())
+  description              String
+  image                    String?
+  userId                   Int
+  user                     User           @relation("UserPosts", fields: [userId], references: [id], onDelete: Cascade)
+  categoryId               Int
+  category                 Category       @relation("CategoryPosts", fields: [categoryId], references: [id], onDelete: Cascade)
+  nextEarningDate          DateTime?
+  thisMonthEarnings        Float          @default(0)
+  totalEarnings            Float          @default(0)
+  lastCalculatedViewsCount Int            @default(0)
+  viewsCount               Int            @default(0)
+  isBlocked                Boolean        @default(false)
+  comments                 Comment[]      @relation("PostComments")
+  notifications            Notification[] @relation("PostNotifications")
+  postviewers              PostViewer[]   @relation("PostViews")
+  likedislikes             LikeDislike[]  @relation("PostLikes")
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
+
+  @@map("posts")
+}
+
+model Comment {
+  id        Int      @id @default(autoincrement())
+  content   String
+  userId    Int
+  user      User     @relation("UserComments", fields: [userId], references: [id], onDelete: Cascade)
+  postId    Int
+  post      Post     @relation("PostComments", fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("comments")
+}
+
+model Challenge {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  user         User     @relation("UserChallenges", fields: [userId], references: [id], onDelete: Cascade)
+  challenge    String
+  passkey      Json?
+  loginpasskey Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("challenges")
+}
+
+model LikeDislike {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation("UserLikes", fields: [userId], references: [id], onDelete: Cascade)
+  postId    Int
+  post      Post     @relation("PostLikes", fields: [postId], references: [id], onDelete: Cascade)
+  liked     Boolean
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("likedislikes")
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+  postId    Int
+  post      Post     @relation("PostNotifications", fields: [postId], references: [id], onDelete: Cascade)
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("notifications")
+}
+
+model Payment {
+  id             Int      @id @default(autoincrement())
+  userId         Int
+  user           User     @relation("UserPayments", fields: [userId], references: [id], onDelete: Cascade)
+  reference      String
+  currency       String
+  status         String   @default("pending")
+  planId         Int
+  plan           Plan     @relation("PlanPayments", fields: [planId], references: [id], onDelete: Cascade)
+  amount         Float    @default(0)
+  expirationDate DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("payments")
+}
+
+model Plan {
+  id        Int       @id @default(autoincrement())
+  planName  String
+  features  String[]  @default([])
+  price     Float
+  userId    Int
+  payments  Payment[] @relation("PlanPayments")
+  users     User[]    @relation("UserSelectedPlan")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@map("plans")
+}
+
+model PostViewer {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  user      User?    @relation("UserPostViews", fields: [userId], references: [id], onDelete: Cascade)
+  postId    Int?
+  post      Post?    @relation("PostViews", fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("postviewers")
+}
+
+model FollowUnfollow {
+  id         Int      @id @default(autoincrement())
+  userId     Int?
+  user       User?    @relation("UserBeingFollowed", fields: [userId], references: [id], onDelete: Cascade)
+  followerId Int?
+  follower   User?    @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("followunfollows")
+}
