@@ -34,6 +34,7 @@ model User {
   isAdmin                    Boolean          @default(false)
   planId                     Int?
   plan                       Plan?            @relation("UserSelectedPlan", fields: [planId], references: [id], onDelete: Cascade)
+  refreshToken               String?
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
 

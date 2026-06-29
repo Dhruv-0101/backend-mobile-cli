@@ -63,22 +63,36 @@ const login = asyncHandler(async (req, res, next) => {
       return res.status(401).json({ message: info.message });
     }
 
-    // Generate token
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET);
-
-    // Update lastLogin
-    await User.update({
-      where: { id: user.id },
-      data: { lastLogin: new Date() },
+    // Generate access token (expires in 15 minutes) and refresh token (expires in 7 days)
+    const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "15m",
+    });
+    const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET + "_refresh", {
+      expiresIn: "7d",
     });
 
-    // Send the response with token
+    // Update lastLogin and store refresh token
+    await User.update({
+      where: { id: user.id },
+      data: { 
+        lastLogin: new Date(),
+        refreshToken: refreshToken
+      },
+    });
+
+    // Send the response with tokens
     res
-      .cookie("token", token, {
+      .cookie("token", accessToken, {
         httpOnly: true,
         secure: false,
         sameSite: "strict",
         maxAge: 24 * 60 * 60 * 1000, // 1 day
+      })
+      .cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: false,
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       })
       .json({
         status: "success",
@@ -86,7 +100,8 @@ const login = asyncHandler(async (req, res, next) => {
         username: user.username,
         email: user.email,
         id: user.id,
-        token: token,
+        token: accessToken,
+        refreshToken: refreshToken,
       });
   })(req, res, next);
 });
@@ -129,6 +144,102 @@ const googleAuthCallback = asyncHandler(async (req, res, next) => {
     }
   )(req, res, next);
 });
+
+const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
+  const { idToken } = req.body;
+  if (!idToken) {
+    return res.status(400).json({ message: "Google ID token is required" });
+  }
+
+  try {
+    const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`);
+    if (!response.ok) {
+      return res.status(401).json({ message: "Invalid Google token" });
+    }
+    const payload = await response.json();
+
+    const webClientId = process.env.GOOGLE_CLIENT_ID;
+    const androidClientId = "42825930077-g6a62r4e3oqb9ani3p453i118o8ahf5a.apps.googleusercontent.com";
+    if (payload.aud !== webClientId && payload.aud !== androidClientId) {
+      return res.status(401).json({ message: "Token audience mismatch" });
+    }
+
+    let user = await User.findFirst({
+      where: {
+        OR: [
+          { googleId: payload.sub },
+          { email: payload.email }
+        ]
+      }
+    });
+
+    if (user) {
+      if (!user.googleId) {
+        user = await User.update({
+          where: { id: user.id },
+          data: {
+            googleId: payload.sub,
+            authMethod: "google",
+            profilePicture: user.profilePicture || payload.picture,
+          }
+        });
+      }
+    } else {
+      user = await User.create({
+        data: {
+          username: payload.name || payload.email.split("@")[0],
+          email: payload.email,
+          googleId: payload.sub,
+          profilePicture: payload.picture,
+          authMethod: "google",
+          isEmailVerified: payload.email_verified === "true" || payload.email_verified === true,
+        }
+      });
+    }
+
+    const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "15m",
+    });
+    const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET + "_refresh", {
+      expiresIn: "7d",
+    });
+
+    await User.update({
+      where: { id: user.id },
+      data: { 
+        lastLogin: new Date(),
+        refreshToken: refreshToken
+      },
+    });
+
+    res
+      .cookie("token", accessToken, {
+        httpOnly: true,
+        secure: false,
+        sameSite: "strict",
+        maxAge: 24 * 60 * 60 * 1000,
+      })
+      .cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: false,
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      })
+      .json({
+        status: "success",
+        message: "Google Login Success",
+        username: user.username,
+        email: user.email,
+        id: user.id,
+        token: accessToken,
+        refreshToken: refreshToken,
+      });
+
+  } catch (error) {
+    next(error);
+  }
+});
+
 
 const checkAuthenticated = async (req, res) => {
   const token = req.cookies.token;
@@ -263,9 +374,81 @@ const checkFollowing = async (req, res) => {
 };
 
 const logout = asyncHandler(async (req, res) => {
-  // Clear the token cookie
+  const userId = req.user;
+  if (userId) {
+    await User.update({
+      where: { id: Number(userId) },
+      data: { refreshToken: null },
+    });
+  }
+  // Clear the token cookies
   res.cookie("token", "", { maxAge: 1 });
+  res.cookie("refreshToken", "", { maxAge: 1 });
   res.status(200).json({ message: "Logout success" });
+});
+
+const refreshTokenCtrl = asyncHandler(async (req, res) => {
+  let refreshToken = req.body.refreshToken || req.cookies.refreshToken;
+  
+  if (!refreshToken) {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      refreshToken = authHeader.split(" ")[1];
+    }
+  }
+
+  if (!refreshToken) {
+    return res.status(401).json({ message: "Refresh token is required" });
+  }
+
+  try {
+    const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET + "_refresh");
+    const user = await User.findUnique({ where: { id: Number(decoded.id) } });
+
+    if (!user) {
+      return res.status(401).json({ message: "User not found" });
+    }
+
+    if (user.refreshToken !== refreshToken) {
+      // Reuse detected - clear DB refresh token to invalidate all sessions
+      await User.update({
+        where: { id: user.id },
+        data: { refreshToken: null },
+      });
+      return res.status(403).json({ message: "Token reuse detected! Please log in again." });
+    }
+
+    // Generate new rotated pair
+    const newAccessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "15m" });
+    const newRefreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET + "_refresh", { expiresIn: "7d" });
+
+    // Store new refresh token
+    await User.update({
+      where: { id: user.id },
+      data: { refreshToken: newRefreshToken },
+    });
+
+    res
+      .cookie("token", newAccessToken, {
+        httpOnly: true,
+        secure: false,
+        sameSite: "strict",
+        maxAge: 24 * 60 * 60 * 1000,
+      })
+      .cookie("refreshToken", newRefreshToken, {
+        httpOnly: true,
+        secure: false,
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      })
+      .json({
+        status: "success",
+        token: newAccessToken,
+        refreshToken: newRefreshToken,
+      });
+  } catch (error) {
+    return res.status(401).json({ message: "Invalid or expired refresh token", error: error.message });
+  }
 });
 
 const verifyEmailAccount = asyncHandler(async (req, res) => {
@@ -762,12 +945,14 @@ module.exports = {
   login,
   googleAuthMiddleware,
   googleAuthCallback,
+  googleMobileLoginCtrl,
   checkAuthenticated,
   profile,
   followUser,
   unfollowUser,
   checkFollowing,
   logout,
+  refreshTokenCtrl,
   verifyEmailAccount,
   verifyEmailAcc,
   forgotPassword,
