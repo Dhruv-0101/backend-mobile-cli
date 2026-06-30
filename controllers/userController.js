@@ -13,8 +13,6 @@ const passport = require("passport");
 const otplib = require("otplib");
 const qrcode = require("qrcode");
 
-
-
 const sendAccVerificationEmail = require("../utils/sendAccVerificationEmail");
 const sendPasswordEmail = require("../utils/sendPasswordEmail");
 const {
@@ -61,9 +59,13 @@ const login = asyncHandler(async (req, res, next) => {
     }
 
     if (user.isTwoFactorEnabled) {
-      const tempToken = jwt.sign({ id: user.id, is2FA: true }, process.env.JWT_SECRET, {
-        expiresIn: "5m",
-      });
+      const tempToken = jwt.sign(
+        { id: user.id, is2FA: true },
+        process.env.JWT_SECRET,
+        {
+          expiresIn: "5m",
+        },
+      );
       return res.json({
         status: "2fa_required",
         message: "Two-factor authentication is required.",
@@ -75,16 +77,20 @@ const login = asyncHandler(async (req, res, next) => {
     const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
       expiresIn: "15m",
     });
-    const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET + "_refresh", {
-      expiresIn: "7d",
-    });
+    const refreshToken = jwt.sign(
+      { id: user.id },
+      process.env.JWT_SECRET + "_refresh",
+      {
+        expiresIn: "7d",
+      },
+    );
 
     // Update lastLogin and store refresh token
     await User.update({
       where: { id: user.id },
-      data: { 
+      data: {
         lastLogin: new Date(),
-        refreshToken: refreshToken
+        refreshToken: refreshToken,
       },
     });
 
@@ -108,13 +114,12 @@ const login = asyncHandler(async (req, res, next) => {
         username: user.username,
         email: user.email,
         id: user.id,
+        isAdmin: user.isAdmin,
         token: accessToken,
         refreshToken: refreshToken,
       });
   })(req, res, next);
 });
-
-
 
 const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
   const { idToken } = req.body;
@@ -123,25 +128,25 @@ const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
   }
 
   try {
-    const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`);
+    const response = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`,
+    );
     if (!response.ok) {
       return res.status(401).json({ message: "Invalid Google token" });
     }
     const payload = await response.json();
 
     const webClientId = process.env.GOOGLE_CLIENT_ID;
-    const androidClientId = "42825930077-g6a62r4e3oqb9ani3p453i118o8ahf5a.apps.googleusercontent.com";
+    const androidClientId =
+      "42825930077-g6a62r4e3oqb9ani3p453i118o8ahf5a.apps.googleusercontent.com";
     if (payload.aud !== webClientId && payload.aud !== androidClientId) {
       return res.status(401).json({ message: "Token audience mismatch" });
     }
 
     let user = await User.findFirst({
       where: {
-        OR: [
-          { googleId: payload.sub },
-          { email: payload.email }
-        ]
-      }
+        OR: [{ googleId: payload.sub }, { email: payload.email }],
+      },
     });
 
     if (user) {
@@ -152,7 +157,7 @@ const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
             googleId: payload.sub,
             authMethod: "google",
             profilePicture: user.profilePicture || payload.picture,
-          }
+          },
         });
       }
     } else {
@@ -163,15 +168,21 @@ const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
           googleId: payload.sub,
           profilePicture: payload.picture,
           authMethod: "google",
-          isEmailVerified: payload.email_verified === "true" || payload.email_verified === true,
-        }
+          isEmailVerified:
+            payload.email_verified === "true" ||
+            payload.email_verified === true,
+        },
       });
     }
 
     if (user.isTwoFactorEnabled) {
-      const tempToken = jwt.sign({ id: user.id, is2FA: true }, process.env.JWT_SECRET, {
-        expiresIn: "5m",
-      });
+      const tempToken = jwt.sign(
+        { id: user.id, is2FA: true },
+        process.env.JWT_SECRET,
+        {
+          expiresIn: "5m",
+        },
+      );
       return res.json({
         status: "2fa_required",
         message: "Two-factor authentication is required.",
@@ -182,15 +193,19 @@ const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
     const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
       expiresIn: "15m",
     });
-    const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET + "_refresh", {
-      expiresIn: "7d",
-    });
+    const refreshToken = jwt.sign(
+      { id: user.id },
+      process.env.JWT_SECRET + "_refresh",
+      {
+        expiresIn: "7d",
+      },
+    );
 
     await User.update({
       where: { id: user.id },
-      data: { 
+      data: {
         lastLogin: new Date(),
-        refreshToken: refreshToken
+        refreshToken: refreshToken,
       },
     });
 
@@ -213,10 +228,10 @@ const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
         username: user.username,
         email: user.email,
         id: user.id,
+        isAdmin: user.isAdmin,
         token: accessToken,
         refreshToken: refreshToken,
       });
-
   } catch (error) {
     next(error);
   }
@@ -224,14 +239,18 @@ const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
 
 const setup2FACtrl = asyncHandler(async (req, res) => {
   const userId = req.user;
-  
+
   const user = await User.findUnique({ where: { id: Number(userId) } });
   if (!user) {
     return res.status(404).json({ message: "User not found" });
   }
 
   const secret = otplib.generateSecret();
-  const otpAuthUri = otplib.generateURI({ issuer: "BlogMapp", label: user.username, secret });
+  const otpAuthUri = otplib.generateURI({
+    issuer: "BlogMapp",
+    label: user.username,
+    secret,
+  });
   const qrCodeDataUrl = await qrcode.toDataURL(otpAuthUri);
 
   res.json({
@@ -245,12 +264,16 @@ const enable2FACtrl = asyncHandler(async (req, res) => {
   const { secret, code } = req.body;
 
   if (!secret || !code) {
-    return res.status(400).json({ message: "Secret and verification code are required" });
+    return res
+      .status(400)
+      .json({ message: "Secret and verification code are required" });
   }
 
   const isValid = await otplib.verify({ token: code, secret });
   if (!isValid) {
-    return res.status(400).json({ message: "Invalid verification code. Please try again." });
+    return res
+      .status(400)
+      .json({ message: "Invalid verification code. Please try again." });
   }
 
   await User.update({
@@ -276,9 +299,14 @@ const disable2FACtrl = asyncHandler(async (req, res) => {
     return res.status(400).json({ message: "2FA is not enabled" });
   }
 
-  const isValid = await otplib.verify({ token: code, secret: user.twoFactorSecret });
+  const isValid = await otplib.verify({
+    token: code,
+    secret: user.twoFactorSecret,
+  });
   if (!isValid) {
-    return res.status(400).json({ message: "Invalid verification code. Please try again." });
+    return res
+      .status(400)
+      .json({ message: "Invalid verification code. Please try again." });
   }
 
   await User.update({
@@ -299,7 +327,9 @@ const verify2FACtrl = asyncHandler(async (req, res) => {
   const { tempToken, code } = req.body;
 
   if (!tempToken || !code) {
-    return res.status(400).json({ message: "Temporary token and 2FA code are required" });
+    return res
+      .status(400)
+      .json({ message: "Temporary token and 2FA code are required" });
   }
 
   try {
@@ -310,26 +340,39 @@ const verify2FACtrl = asyncHandler(async (req, res) => {
 
     const user = await User.findUnique({ where: { id: Number(decoded.id) } });
     if (!user || !user.isTwoFactorEnabled || !user.twoFactorSecret) {
-      return res.status(400).json({ message: "Two-Factor authentication is not set up for this user" });
+      return res
+        .status(400)
+        .json({
+          message: "Two-Factor authentication is not set up for this user",
+        });
     }
 
-    const isValid = await otplib.verify({ token: code, secret: user.twoFactorSecret });
+    const isValid = await otplib.verify({
+      token: code,
+      secret: user.twoFactorSecret,
+    });
     if (!isValid) {
-      return res.status(400).json({ message: "Invalid 2FA code. Please try again." });
+      return res
+        .status(400)
+        .json({ message: "Invalid 2FA code. Please try again." });
     }
 
     const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
       expiresIn: "15m",
     });
-    const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET + "_refresh", {
-      expiresIn: "7d",
-    });
+    const refreshToken = jwt.sign(
+      { id: user.id },
+      process.env.JWT_SECRET + "_refresh",
+      {
+        expiresIn: "7d",
+      },
+    );
 
     await User.update({
       where: { id: user.id },
-      data: { 
+      data: {
         lastLogin: new Date(),
-        refreshToken: refreshToken
+        refreshToken: refreshToken,
       },
     });
 
@@ -352,18 +395,16 @@ const verify2FACtrl = asyncHandler(async (req, res) => {
         username: user.username,
         email: user.email,
         id: user.id,
+        isAdmin: user.isAdmin,
         token: accessToken,
         refreshToken: refreshToken,
       });
-
   } catch (err) {
-    return res.status(401).json({ message: "Session expired or invalid token" });
+    return res
+      .status(401)
+      .json({ message: "Session expired or invalid token" });
   }
 });
-
-
-
-
 
 const profile = async (req, res) => {
   const userId = req.user;
@@ -412,7 +453,9 @@ const followUser = asyncHandler(async (req, res) => {
   });
 
   if (existingFollow) {
-    return res.status(200).json({ message: "You are already following this user" });
+    return res
+      .status(200)
+      .json({ message: "You are already following this user" });
   }
 
   await FollowUnfollow.create({
@@ -488,7 +531,7 @@ const logout = asyncHandler(async (req, res) => {
 
 const refreshTokenCtrl = asyncHandler(async (req, res) => {
   let refreshToken = req.body.refreshToken || req.cookies.refreshToken;
-  
+
   if (!refreshToken) {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith("Bearer ")) {
@@ -501,7 +544,10 @@ const refreshTokenCtrl = asyncHandler(async (req, res) => {
   }
 
   try {
-    const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET + "_refresh");
+    const decoded = jwt.verify(
+      refreshToken,
+      process.env.JWT_SECRET + "_refresh",
+    );
     const user = await User.findUnique({ where: { id: Number(decoded.id) } });
 
     if (!user) {
@@ -514,12 +560,20 @@ const refreshTokenCtrl = asyncHandler(async (req, res) => {
         where: { id: user.id },
         data: { refreshToken: null },
       });
-      return res.status(403).json({ message: "Token reuse detected! Please log in again." });
+      return res
+        .status(403)
+        .json({ message: "Token reuse detected! Please log in again." });
     }
 
     // Generate new rotated pair
-    const newAccessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: "15m" });
-    const newRefreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET + "_refresh", { expiresIn: "7d" });
+    const newAccessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "15m",
+    });
+    const newRefreshToken = jwt.sign(
+      { id: user.id },
+      process.env.JWT_SECRET + "_refresh",
+      { expiresIn: "7d" },
+    );
 
     // Store new refresh token
     await User.update({
@@ -546,7 +600,12 @@ const refreshTokenCtrl = asyncHandler(async (req, res) => {
         refreshToken: newRefreshToken,
       });
   } catch (error) {
-    return res.status(401).json({ message: "Invalid or expired refresh token", error: error.message });
+    return res
+      .status(401)
+      .json({
+        message: "Invalid or expired refresh token",
+        error: error.message,
+      });
   }
 });
 
@@ -839,7 +898,7 @@ const userEarnings = async (req, res) => {
     // Calculate total earnings
     const totalEarnings = userPosts.reduce(
       (accum, post) => accum + post.totalEarnings,
-      0
+      0,
     );
 
     return res.status(200).json({ totalEarnings });
@@ -850,8 +909,6 @@ const userEarnings = async (req, res) => {
       .json({ message: "Error calculating total earnings" });
   }
 };
-
-
 
 module.exports = {
   registerUserCtrl,
