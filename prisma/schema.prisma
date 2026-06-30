@@ -35,6 +35,8 @@ model User {
   planId                     Int?
   plan                       Plan?            @relation("UserSelectedPlan", fields: [planId], references: [id], onDelete: Cascade)
   refreshToken               String?
+  twoFactorSecret            String?
+  isTwoFactorEnabled         Boolean          @default(false)
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
 

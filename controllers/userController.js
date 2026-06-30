@@ -10,13 +10,10 @@ const jwt = require("jsonwebtoken");
 const asyncHandler = require("express-async-handler");
 const crypto = require("crypto");
 const passport = require("passport");
+const otplib = require("otplib");
+const qrcode = require("qrcode");
 
-const {
-  generateRegistrationOptions,
-  verifyRegistrationResponse,
-  generateAuthenticationOptions,
-  verifyAuthenticationResponse,
-} = require("@simplewebauthn/server");
+
 
 const sendAccVerificationEmail = require("../utils/sendAccVerificationEmail");
 const sendPasswordEmail = require("../utils/sendPasswordEmail");
@@ -63,6 +60,17 @@ const login = asyncHandler(async (req, res, next) => {
       return res.status(401).json({ message: info.message });
     }
 
+    if (user.isTwoFactorEnabled) {
+      const tempToken = jwt.sign({ id: user.id, is2FA: true }, process.env.JWT_SECRET, {
+        expiresIn: "5m",
+      });
+      return res.json({
+        status: "2fa_required",
+        message: "Two-factor authentication is required.",
+        tempToken,
+      });
+    }
+
     // Generate access token (expires in 15 minutes) and refresh token (expires in 7 days)
     const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
       expiresIn: "15m",
@@ -106,44 +114,7 @@ const login = asyncHandler(async (req, res, next) => {
   })(req, res, next);
 });
 
-const googleAuthMiddleware = passport.authenticate("google", {
-  scope: ["profile", "email"],
-});
 
-const googleAuthCallback = asyncHandler(async (req, res, next) => {
-  passport.authenticate(
-    "google",
-    {
-      failureRedirect: "/login",
-      session: false,
-    },
-    async (err, user, info) => {
-      try {
-        if (err) return next(err);
-
-        if (!user) {
-          return res.redirect("http://localhost:5173/login?error=Google auth failed");
-        }
-
-        const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-          expiresIn: "3d",
-        });
-
-        // Set the cookie
-        res.cookie("token", token, {
-          httpOnly: true,
-          secure: false,
-          sameSite: "strict",
-          maxAge: 24 * 60 * 60 * 1000, // 1 day
-        });
-
-        res.redirect("http://localhost:5173/dashboard");
-      } catch (error) {
-        next(error);
-      }
-    }
-  )(req, res, next);
-});
 
 const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
   const { idToken } = req.body;
@@ -197,6 +168,17 @@ const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
       });
     }
 
+    if (user.isTwoFactorEnabled) {
+      const tempToken = jwt.sign({ id: user.id, is2FA: true }, process.env.JWT_SECRET, {
+        expiresIn: "5m",
+      });
+      return res.json({
+        status: "2fa_required",
+        message: "Two-factor authentication is required.",
+        tempToken,
+      });
+    }
+
     const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
       expiresIn: "15m",
     });
@@ -240,31 +222,148 @@ const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
   }
 });
 
+const setup2FACtrl = asyncHandler(async (req, res) => {
+  const userId = req.user;
+  
+  const user = await User.findUnique({ where: { id: Number(userId) } });
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
 
-const checkAuthenticated = async (req, res) => {
-  const token = req.cookies.token;
-  if (!token) {
-    return res.status(401).json({ isAuthenticated: false });
+  const secret = otplib.generateSecret();
+  const otpAuthUri = otplib.generateURI({ issuer: "BlogMapp", label: user.username, secret });
+  const qrCodeDataUrl = await qrcode.toDataURL(otpAuthUri);
+
+  res.json({
+    secret,
+    qrCodeDataUrl,
+  });
+});
+
+const enable2FACtrl = asyncHandler(async (req, res) => {
+  const userId = req.user;
+  const { secret, code } = req.body;
+
+  if (!secret || !code) {
+    return res.status(400).json({ message: "Secret and verification code are required" });
+  }
+
+  const isValid = await otplib.verify({ token: code, secret });
+  if (!isValid) {
+    return res.status(400).json({ message: "Invalid verification code. Please try again." });
+  }
+
+  await User.update({
+    where: { id: Number(userId) },
+    data: {
+      twoFactorSecret: secret,
+      isTwoFactorEnabled: true,
+    },
+  });
+
+  res.json({
+    status: "success",
+    message: "Two-Factor Authentication has been successfully enabled!",
+  });
+});
+
+const disable2FACtrl = asyncHandler(async (req, res) => {
+  const userId = req.user;
+  const { code } = req.body;
+
+  const user = await User.findUnique({ where: { id: Number(userId) } });
+  if (!user || !user.isTwoFactorEnabled) {
+    return res.status(400).json({ message: "2FA is not enabled" });
+  }
+
+  const isValid = await otplib.verify({ token: code, secret: user.twoFactorSecret });
+  if (!isValid) {
+    return res.status(400).json({ message: "Invalid verification code. Please try again." });
+  }
+
+  await User.update({
+    where: { id: Number(userId) },
+    data: {
+      twoFactorSecret: null,
+      isTwoFactorEnabled: false,
+    },
+  });
+
+  res.json({
+    status: "success",
+    message: "Two-Factor Authentication has been disabled.",
+  });
+});
+
+const verify2FACtrl = asyncHandler(async (req, res) => {
+  const { tempToken, code } = req.body;
+
+  if (!tempToken || !code) {
+    return res.status(400).json({ message: "Temporary token and 2FA code are required" });
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findUnique({ where: { id: Number(decoded.id) } });
-
-    if (!user) {
-      return res.status(401).json({ isAuthenticated: false });
+    const decoded = jwt.verify(tempToken, process.env.JWT_SECRET);
+    if (!decoded.is2FA) {
+      return res.status(401).json({ message: "Invalid temporary token" });
     }
 
-    return res.status(200).json({
-      isAuthenticated: true,
-      id: user.id,
-      username: user.username,
-      profilePicture: user.profilePicture,
+    const user = await User.findUnique({ where: { id: Number(decoded.id) } });
+    if (!user || !user.isTwoFactorEnabled || !user.twoFactorSecret) {
+      return res.status(400).json({ message: "Two-Factor authentication is not set up for this user" });
+    }
+
+    const isValid = await otplib.verify({ token: code, secret: user.twoFactorSecret });
+    if (!isValid) {
+      return res.status(400).json({ message: "Invalid 2FA code. Please try again." });
+    }
+
+    const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "15m",
     });
-  } catch (error) {
-    return res.status(401).json({ isAuthenticated: false });
+    const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET + "_refresh", {
+      expiresIn: "7d",
+    });
+
+    await User.update({
+      where: { id: user.id },
+      data: { 
+        lastLogin: new Date(),
+        refreshToken: refreshToken
+      },
+    });
+
+    res
+      .cookie("token", accessToken, {
+        httpOnly: true,
+        secure: false,
+        sameSite: "strict",
+        maxAge: 24 * 60 * 60 * 1000,
+      })
+      .cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: false,
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      })
+      .json({
+        status: "success",
+        message: "Login Success",
+        username: user.username,
+        email: user.email,
+        id: user.id,
+        token: accessToken,
+        refreshToken: refreshToken,
+      });
+
+  } catch (err) {
+    return res.status(401).json({ message: "Session expired or invalid token" });
   }
-};
+});
+
+
+
+
 
 const profile = async (req, res) => {
   const userId = req.user;
@@ -752,201 +851,12 @@ const userEarnings = async (req, res) => {
   }
 };
 
-//-----------------------for multiple passkey two step authentication---------------------//
 
-const registerUserPasskeyCtrl = asyncHandler(async (req, res) => {
-  const userId = req.user;
-
-  // Check if user exists
-  const user = await User.findUnique({ where: { id: Number(userId) } });
-  if (!user) {
-    return res.status(404).json({ error: "User not found!" });
-  }
-
-  // Generate the registration options
-  const challengePayload = await generateRegistrationOptions({
-    rpID: "localhost",
-    rpName: "My Localhost Machine",
-    attestationType: "none",
-    userName: user.username,
-    timeout: 30_000,
-  });
-
-  // Store the challenge in the database
-  await Challenge.create({
-    data: {
-      userId: Number(userId),
-      challenge: challengePayload.challenge,
-      loginpasskey: false,
-    },
-  });
-
-  return res.json({ options: challengePayload });
-});
-
-const registerPasskeyVerifyCtrl = asyncHandler(async (req, res) => {
-  const userId = req.user;
-  const { cred } = req.body;
-
-  const userFound = await User.findUnique({ where: { id: Number(userId) } });
-  if (!userFound) {
-    throw new Error("User not found");
-  }
-
-  // Retrieve the challenge from the database
-  const challenge = await Challenge.findFirst({
-    where: { userId: Number(userId), loginpasskey: false },
-    orderBy: { createdAt: "desc" }, // Get the most recent challenge
-  });
-  if (!challenge) {
-    throw new Error("Challenge not found");
-  }
-
-  // Verify the registration response using the retrieved challenge
-  const verificationResult = await verifyRegistrationResponse({
-    expectedChallenge: challenge.challenge,
-    expectedOrigin: "http://localhost:5173",
-    expectedRPID: "localhost",
-    response: cred,
-  });
-
-  if (!verificationResult.verified) {
-    return res.json({ error: "Could not verify" });
-  }
-
-  // Update the challenge entry with the passkey data
-  await Challenge.update({
-    where: { id: challenge.id },
-    data: {
-      passkey: {
-        ...verificationResult.registrationInfo,
-        credentialPublicKey: Buffer.from(
-          verificationResult.registrationInfo.credentialPublicKey
-        ).toString("base64"), // Convert Buffer to Base64 string
-      },
-    },
-  });
-
-  res.json({ verified: true });
-});
-
-const loginUserPassKey = asyncHandler(async (req, res) => {
-  const { username } = req.body;
-
-  const user = await User.findFirst({ where: { username } });
-  if (!user) {
-    return res.status(404).json({ error: "User not found!" });
-  }
-
-  await Challenge.deleteMany({
-    where: {
-      passkey: null,
-    },
-  });
-
-  const opts = await generateAuthenticationOptions({
-    rpID: "localhost",
-  });
-
-  // Store the challenge in the database
-  await Challenge.create({
-    data: {
-      userId: user.id,
-      challenge: opts.challenge,
-      loginpasskey: true,
-    },
-  });
-
-  return res.json({ options: opts });
-});
-
-const loginPassKeyVerifyCtrl = asyncHandler(async (req, res) => {
-  const { username, cred } = req.body;
-
-  const user = await User.findFirst({ where: { username } });
-  if (!user) {
-    return res.status(404).json({ error: "User not found!" });
-  }
-
-  // Retrieve the challenge record for the user
-  const challenge = await Challenge.findFirst({
-    where: { userId: user.id, loginpasskey: true },
-  });
-  if (!challenge) {
-    return res.status(404).json({ error: "Challenge data not found!" });
-  }
-
-  await Challenge.deleteMany({
-    where: {
-      passkey: null,
-    },
-  });
-
-  // Retrieve all stored passkeys for the user
-  const passkeys = await Challenge.findMany({
-    where: { userId: user.id, loginpasskey: false },
-  });
-  if (!passkeys || passkeys.length === 0) {
-    return res.status(404).json({ error: "Passkey data not found!" });
-  }
-
-  let verified = false;
-
-  for (const challengepasskey of passkeys) {
-    const passkey = challengepasskey.passkey;
-    passkey.credentialPublicKey = Buffer.from(
-      passkey.credentialPublicKey,
-      "base64"
-    );
-
-    const result = await verifyAuthenticationResponse({
-      expectedChallenge: challenge.challenge,
-      expectedOrigin: "http://localhost:5173",
-      expectedRPID: "localhost",
-      response: cred,
-      authenticator: {
-        credentialID: passkey.credentialID,
-        credentialPublicKey: passkey.credentialPublicKey,
-        counter: passkey.counter,
-      },
-    });
-    console.log(result);
-
-    if (result.verified) {
-      verified = true;
-    }
-  }
-  console.log(verified);
-
-  if (!verified) {
-    return res.json({ error: "Authentication verification failed" });
-  } else {
-    await Challenge.deleteMany({
-      where: { userId: user.id, loginpasskey: true, id: challenge.id },
-    });
-
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "3d",
-    });
-
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: false,
-      sameSite: "strict",
-      maxAge: 24 * 60 * 60 * 1000, // 1 day
-    });
-
-    res.json({ success: true });
-  }
-});
 
 module.exports = {
   registerUserCtrl,
   login,
-  googleAuthMiddleware,
-  googleAuthCallback,
   googleMobileLoginCtrl,
-  checkAuthenticated,
   profile,
   followUser,
   unfollowUser,
@@ -964,8 +874,8 @@ module.exports = {
   getFollowersCount,
   getFollowingsCount,
   userEarnings,
-  registerUserPasskeyCtrl,
-  registerPasskeyVerifyCtrl,
-  loginUserPassKey,
-  loginPassKeyVerifyCtrl,
+  setup2FACtrl,
+  enable2FACtrl,
+  disable2FACtrl,
+  verify2FACtrl,
 };

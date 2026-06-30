@@ -7,7 +7,6 @@ const passport = require("passport");
 const LocalStrategy = require("passport-local").Strategy;
 const JWTStrategy = require("passport-jwt").Strategy; //Strategy for jwt
 const ExtractJWT = require("passport-jwt").ExtractJwt; //Extract for jwt
-const GoogleStrategy = require("passport-google-oauth20");
 
 passport.use(
   new LocalStrategy(
@@ -62,48 +61,6 @@ passport.use(
       return done(error, false);
     }
   })
-);
-
-passport.use(
-  new GoogleStrategy(
-    {
-      clientID: process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "http://localhost:8080/api/v1/users/auth/google/callback",
-      scope: ["profile", "email"],
-    },
-    async (accessToken, refreshToken, profile, done) => {
-      console.log(profile);
-      try {
-        // Check if user found
-        let user = await User.findFirst({ where: { googleId: profile.id } });
-
-        // Extract email from the profile
-        let email = "";
-        if (Array.isArray(profile.emails) && profile.emails.length > 0) {
-          email = profile.emails[0].value;
-        }
-
-        // Check if user not found
-        if (!user) {
-          // Create new user with email
-          user = await User.create({
-            data: {
-              username: profile.displayName,
-              googleId: profile.id,
-              profilePicture: profile.photos[0].value, // Access profile picture
-              authMethod: "google",
-              email: email, // Save the email address
-            }
-          });
-        }
-
-        done(null, user);
-      } catch (error) {
-        done(error, null);
-      }
-    }
-  )
 );
 
 module.exports = passport;
