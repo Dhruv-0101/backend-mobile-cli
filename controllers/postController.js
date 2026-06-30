@@ -96,6 +96,13 @@ const fetchAllPosts = asyncHandler(async (req, res) => {
   const posts = await Post.findMany({
     where,
     include: {
+      user: {
+        select: {
+          id: true,
+          username: true,
+          profilePicture: true,
+        },
+      },
       category: {
         include: {
           user: {
@@ -103,6 +110,22 @@ const fetchAllPosts = asyncHandler(async (req, res) => {
               username: true,
             },
           },
+        },
+      },
+      comments: {
+        select: {
+          id: true,
+        },
+      },
+      postviewers: {
+        select: {
+          userId: true,
+        },
+      },
+      likedislikes: {
+        select: {
+          liked: true,
+          userId: true,
         },
       },
     },
@@ -137,9 +160,13 @@ const getPost = asyncHandler(async (req, res) => {
     include: {
       user: {
         select: {
+          id: true,
           username: true,
+          profilePicture: true,
         },
       },
+      category: true,
+      likedislikes: true,
     },
   });
 
