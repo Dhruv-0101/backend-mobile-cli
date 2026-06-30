@@ -428,6 +428,11 @@ const getUserPostsController = async (req, res) => {
     // Retrieve all posts belonging to the user
     const userPosts = await Post.findMany({
       where: { userId: Number(userId) },
+      include: {
+        comments: true,
+        likedislikes: true,
+        postviewers: true,
+      },
     });
 
     if (!userPosts || userPosts.length === 0) {
@@ -495,6 +500,11 @@ const getUserPostsController = async (req, res) => {
 
     const freshUserPosts = await Post.findMany({
       where: { userId: Number(userId) },
+      include: {
+        comments: true,
+        likedislikes: true,
+        postviewers: true,
+      },
     });
 
     // Return both user posts
