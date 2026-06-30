@@ -115,6 +115,7 @@ const login = asyncHandler(async (req, res, next) => {
         email: user.email,
         id: user.id,
         isAdmin: user.isAdmin,
+        profilePicture: user.profilePicture,
         token: accessToken,
         refreshToken: refreshToken,
       });
@@ -229,6 +230,7 @@ const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
         email: user.email,
         id: user.id,
         isAdmin: user.isAdmin,
+        profilePicture: user.profilePicture,
         token: accessToken,
         refreshToken: refreshToken,
       });
