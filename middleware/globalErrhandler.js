@@ -1,4 +1,5 @@
 const globalErrhandler = (err, req, res, next) => {
+  console.error("ERROR IN SERVER:", err);
   const stack = err?.stack;
   const statusCode = err?.statusCode ? err?.statusCode : 500;
   const message = err?.message;

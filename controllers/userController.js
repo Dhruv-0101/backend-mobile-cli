@@ -118,6 +118,9 @@ const login = asyncHandler(async (req, res, next) => {
         profilePicture: user.profilePicture,
         token: accessToken,
         refreshToken: refreshToken,
+        isTwoFactorEnabled: user.isTwoFactorEnabled,
+        hasSelectedPlan: user.hasSelectedPlan,
+        planId: user.planId,
       });
   })(req, res, next);
 });
@@ -233,6 +236,9 @@ const googleMobileLoginCtrl = asyncHandler(async (req, res, next) => {
         profilePicture: user.profilePicture,
         token: accessToken,
         refreshToken: refreshToken,
+        isTwoFactorEnabled: user.isTwoFactorEnabled,
+        hasSelectedPlan: user.hasSelectedPlan,
+        planId: user.planId,
       });
   } catch (error) {
     next(error);
@@ -342,11 +348,9 @@ const verify2FACtrl = asyncHandler(async (req, res) => {
 
     const user = await User.findUnique({ where: { id: Number(decoded.id) } });
     if (!user || !user.isTwoFactorEnabled || !user.twoFactorSecret) {
-      return res
-        .status(400)
-        .json({
-          message: "Two-Factor authentication is not set up for this user",
-        });
+      return res.status(400).json({
+        message: "Two-Factor authentication is not set up for this user",
+      });
     }
 
     const isValid = await otplib.verify({
@@ -400,6 +404,10 @@ const verify2FACtrl = asyncHandler(async (req, res) => {
         isAdmin: user.isAdmin,
         token: accessToken,
         refreshToken: refreshToken,
+        isTwoFactorEnabled: user.isTwoFactorEnabled,
+        profilePicture: user.profilePicture,
+        hasSelectedPlan: user.hasSelectedPlan,
+        planId: user.planId,
       });
   } catch (err) {
     return res
@@ -426,6 +434,7 @@ const profile = async (req, res) => {
       lastLogin: true,
       isAdmin: true,
       planId: true,
+      isTwoFactorEnabled: true,
       createdAt: true,
       updatedAt: true,
     },
@@ -602,12 +611,10 @@ const refreshTokenCtrl = asyncHandler(async (req, res) => {
         refreshToken: newRefreshToken,
       });
   } catch (error) {
-    return res
-      .status(401)
-      .json({
-        message: "Invalid or expired refresh token",
-        error: error.message,
-      });
+    return res.status(401).json({
+      message: "Invalid or expired refresh token",
+      error: error.message,
+    });
   }
 });
 
